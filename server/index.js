@@ -23,6 +23,10 @@ app.use("/api/user", userRouter)
 app.use("/api/interview" , interviewRouter)
 app.use("/api/payment" , paymentRouter)
 
+app.get("/", (req, res) => {
+    res.send("InterviewIQ API is running successfully!");
+});
+
 const PORT = process.env.PORT || 6000
 app.listen(PORT , ()=>{
     console.log(`Server running on port ${PORT}`)
