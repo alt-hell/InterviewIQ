@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { BsRobot } from "react-icons/bs";
 import { IoSparkles } from "react-icons/io5";
 import { motion } from "motion/react"
 import { FcGoogle } from "react-icons/fc";
+import { FaSpinner } from "react-icons/fa";
 import { signInWithPopup } from 'firebase/auth';
 import { auth, provider } from '../utils/firebase';
 import axios from 'axios';
@@ -14,9 +15,11 @@ import { useNavigate } from 'react-router-dom';
 function Auth({isModel = false}) {
     const dispatch = useDispatch()
     const navigate = useNavigate()
+    const [loading, setLoading] = useState(false);
 
     const handleGoogleAuth = async () => {
         try {
+            setLoading(true);
             // Firebase Google Sign-In
             const firebaseResult = await signInWithPopup(auth, provider);
             const name = firebaseResult.user.displayName;
@@ -31,7 +34,8 @@ function Auth({isModel = false}) {
             
         } catch (error) {
             console.log(error)
-              dispatch(setUserData(null))
+            dispatch(setUserData(null))
+            setLoading(false);
         }
     }
   return (
@@ -73,12 +77,21 @@ function Auth({isModel = false}) {
 
             <motion.button 
             onClick={handleGoogleAuth}
-            whileHover={{opacity:0.9 , scale:1.03}}
-            whileTap={{opacity:1 , scale:0.98}}
-            className='w-full flex items-center justify-center gap-3 py-3 bg-black text-white rounded-full shadow-md '>
-                <FcGoogle size={20}/>
-                Continue with Google
-
+            disabled={loading}
+            whileHover={!loading ? {opacity:0.9 , scale:1.03} : {}}
+            whileTap={!loading ? {opacity:1 , scale:0.98} : {}}
+            className='w-full flex items-center justify-center gap-3 py-3 bg-black text-white rounded-full shadow-md disabled:opacity-70 disabled:cursor-not-allowed transition-all duration-200'>
+                {loading ? (
+                    <>
+                        <FaSpinner className="animate-spin text-white" size={20} />
+                        Signing in...
+                    </>
+                ) : (
+                    <>
+                        <FcGoogle size={20}/>
+                        Continue with Google
+                    </>
+                )}
    
             </motion.button>
         </motion.div>
