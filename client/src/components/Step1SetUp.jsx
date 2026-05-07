@@ -1,5 +1,5 @@
 import React from 'react'
-import { motion } from "motion/react"
+import { motion, AnimatePresence } from "motion/react"
 import {
     FaUserTie,
     FaBriefcase,
@@ -12,6 +12,7 @@ import axios from "axios"
 import { ServerUrl } from '../App';
 import { useDispatch, useSelector } from 'react-redux';
 import { setUserData } from '../redux/userSlice';
+import toast from 'react-hot-toast';
 function Step1SetUp({ onStart }) {
     const {userData}= useSelector((state)=>state.user)
     const dispatch = useDispatch()
@@ -25,6 +26,7 @@ function Step1SetUp({ onStart }) {
     const [resumeText, setResumeText] = useState("");
     const [analysisDone, setAnalysisDone] = useState(false);
     const [analyzing, setAnalyzing] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false);
 
 
     const handleUploadResume = async () => {
@@ -45,11 +47,13 @@ function Step1SetUp({ onStart }) {
             setSkills(result.data.skills || []);
             setResumeText(result.data.resumeText || "");
             setAnalysisDone(true);
+            toast.success("Resume analyzed successfully!");
 
             setAnalyzing(false);
 
         } catch (error) {
             console.log(error)
+            toast.error(error?.response?.data?.message || "Failed to analyze resume. Please try again.");
             setAnalyzing(false);
         }
     }
@@ -63,11 +67,14 @@ function Step1SetUp({ onStart }) {
             dispatch(setUserData({...userData , credits:result.data.creditsLeft}))
            }
            setLoading(false)
+           setShowConfirm(false)
            onStart(result.data)
 
         } catch (error) {
             console.log(error)
+            toast.error(error?.response?.data?.message || "Failed to start interview. Please try again.");
             setLoading(false)
+            setShowConfirm(false)
         }
     }
     return (
@@ -250,12 +257,15 @@ function Step1SetUp({ onStart }) {
 
 
                         <motion.button
-                        onClick={handleStart}
+                        onClick={() => {
+                            if (!role || !experience) return;
+                            setShowConfirm(true);
+                        }}
                             disabled={!role || !experience || loading}
                             whileHover={{ scale: 1.03 }}
                             whileTap={{ scale: 0.95 }}
                             className='w-full disabled:bg-gray-600 bg-green-600 hover:bg-green-700 text-white py-3 rounded-full text-lg font-semibold transition duration-300 shadow-md'>
-                            {loading ? "Staring...":"Start Interview"}
+                            {loading ? "Starting...":"Start Interview"}
 
 
                         </motion.button>
@@ -263,6 +273,67 @@ function Step1SetUp({ onStart }) {
 
                 </motion.div>
             </div>
+
+            {/* Confirmation Modal */}
+            <AnimatePresence>
+              {showConfirm && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                  onClick={() => !loading && setShowConfirm(false)}
+                >
+                  <motion.div
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+                  >
+                    <div className="text-center mb-6">
+                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <FaMicrophoneAlt className="text-green-600 text-2xl" />
+                      </div>
+                      <h3 className="text-xl font-bold text-gray-800 mb-2">Ready to Start?</h3>
+                      <p className="text-gray-500 text-sm">
+                        This will deduct <span className="font-bold text-green-600">50 credits</span> from your account.
+                      </p>
+                      <p className="text-gray-400 text-xs mt-1">
+                        Current balance: <span className="font-semibold">{userData?.credits || 0} credits</span>
+                      </p>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-xl p-4 mb-6 space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-500">Role:</span><span className="font-medium text-gray-800">{role}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Experience:</span><span className="font-medium text-gray-800">{experience}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Mode:</span><span className="font-medium text-gray-800">{mode}</span></div>
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setShowConfirm(false)}
+                        disabled={loading}
+                        className="flex-1 py-3 rounded-xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 transition disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleStart}
+                        disabled={loading}
+                        className="flex-1 py-3 rounded-xl bg-green-600 text-white font-semibold hover:bg-green-700 transition disabled:opacity-70 flex items-center justify-center gap-2"
+                      >
+                        {loading ? (
+                          <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Starting...</>
+                        ) : (
+                          "Confirm & Start"
+                        )}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
         </motion.div>
     )

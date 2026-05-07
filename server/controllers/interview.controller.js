@@ -6,6 +6,15 @@ import User from "../models/user.model.js";
 import Interview from "../models/interview.model.js";
 
 
+// Safely parse JSON from AI responses — strips markdown code fences if present
+const safeJsonParse = (text) => {
+  let cleaned = text.trim();
+  // Remove markdown code fences: ```json ... ``` or ``` ... ```
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  return JSON.parse(cleaned);
+};
+
+
 // Groq Whisper Speech-to-Text endpoint
 export const transcribeAnswer = async (req, res) => {
   try {
@@ -83,7 +92,7 @@ Return strictly JSON:
 
     const aiResponse = await askAi(messages)
 
-    const parsed = JSON.parse(aiResponse);
+    const parsed = safeJsonParse(aiResponse);
 
     fs.unlinkSync(filepath)
 
@@ -254,6 +263,14 @@ export const submitAnswer = async (req, res) => {
     const { interviewId, questionIndex, answer, timeTaken } = req.body
 
     const interview = await Interview.findById(interviewId)
+    if (!interview) {
+      return res.status(404).json({ message: "Interview not found." });
+    }
+
+    if (questionIndex < 0 || questionIndex >= interview.questions.length) {
+      return res.status(400).json({ message: "Invalid question index." });
+    }
+
     const question = interview.questions[questionIndex]
 
     // If no answer
@@ -341,7 +358,21 @@ Answer: ${answer}
     const aiResponse = await askAi(messages)
 
 
-    const parsed = JSON.parse(aiResponse);
+    let parsed;
+    try {
+      parsed = safeJsonParse(aiResponse);
+    } catch (parseErr) {
+      console.error("AI response parse failed:", aiResponse);
+      // Fallback: give a neutral score so the interview isn't stuck
+      question.answer = answer;
+      question.score = 5;
+      question.feedback = "Your answer has been recorded. AI evaluation encountered an issue.";
+      question.confidence = 5;
+      question.communication = 5;
+      question.correctness = 5;
+      await interview.save();
+      return res.status(200).json({ feedback: question.feedback });
+    }
 
     question.answer = answer;
     question.confidence = parsed.confidence;
@@ -358,6 +389,39 @@ Answer: ${answer}
 
   }
 }
+
+
+export const saveDraft = async (req, res) => {
+  try {
+    const { interviewId, questionIndex, answer } = req.body;
+
+    if (!interviewId || questionIndex === undefined || questionIndex === null) {
+      return res.status(400).json({ message: "interviewId and questionIndex are required." });
+    }
+
+    const interview = await Interview.findById(interviewId);
+    if (!interview) {
+      return res.status(404).json({ message: "Interview not found." });
+    }
+
+    const question = interview.questions[questionIndex];
+    if (!question) {
+      return res.status(404).json({ message: "Question not found." });
+    }
+
+    // Only save draft if the question hasn't been fully submitted yet (no score)
+    if (question.score > 0 || question.feedback) {
+      return res.json({ saved: false, message: "Answer already submitted and evaluated." });
+    }
+
+    question.answer = answer || "";
+    await interview.save();
+
+    return res.json({ saved: true });
+  } catch (error) {
+    return res.status(500).json({ message: `Failed to save draft: ${error}` });
+  }
+};
 
 
 export const finishInterview = async (req,res) => {

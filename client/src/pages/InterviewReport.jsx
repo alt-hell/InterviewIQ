@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import axios from "axios"
 import { ServerUrl } from '../App';
 import Step3Report from '../components/Step3Report';
+import toast from 'react-hot-toast';
 function InterviewReport() {
   const {id} = useParams()
   const [report,setReport] = useState(null);
@@ -16,6 +17,7 @@ function InterviewReport() {
         setReport(result.data)
       } catch (error) {
         console.log(error)
+        toast.error("Failed to load report.")
       }
     }
 

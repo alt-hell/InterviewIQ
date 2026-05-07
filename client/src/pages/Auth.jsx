@@ -11,6 +11,7 @@ import { ServerUrl } from '../App';
 import { useDispatch } from 'react-redux';
 import { setUserData } from '../redux/userSlice';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 
 function Auth({isModel = false}) {
     const dispatch = useDispatch()
@@ -34,6 +35,7 @@ function Auth({isModel = false}) {
             
         } catch (error) {
             console.log(error)
+            toast.error("Sign-in failed. Please try again.");
             dispatch(setUserData(null))
             setLoading(false);
         }

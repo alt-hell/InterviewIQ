@@ -4,12 +4,14 @@ import { motion } from "motion/react"
 import { BsRobot, BsCoin } from "react-icons/bs";
 import { HiOutlineLogout } from "react-icons/hi";
 import { FaUserAstronaut } from "react-icons/fa";
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { ServerUrl } from '../App';
 import { setUserData } from '../redux/userSlice';
 import AuthModel from './AuthModel';
+import toast from 'react-hot-toast';
+
 function Navbar() {
     const {userData} = useSelector((state)=>state.user)
     const [showCreditPopup,setShowCreditPopup] = useState(false)
@@ -18,16 +20,37 @@ function Navbar() {
     const dispatch = useDispatch()
     const [showAuth, setShowAuth] = useState(false);
 
+    // Refs for click-outside detection
+    const creditPopupRef = useRef(null);
+    const userPopupRef = useRef(null);
+
+    // Close popups when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (creditPopupRef.current && !creditPopupRef.current.contains(event.target)) {
+                setShowCreditPopup(false);
+            }
+            if (userPopupRef.current && !userPopupRef.current.contains(event.target)) {
+                setShowUserPopup(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
     const handleLogout = async () => {
         try {
             await axios.get(ServerUrl + "/api/auth/logout" , {withCredentials:true})
             dispatch(setUserData(null))
             setShowCreditPopup(false)
             setShowUserPopup(false)
+            toast.success("Logged out successfully")
             navigate("/")
 
         } catch (error) {
             console.log(error)
+            toast.error("Logout failed. Please try again.")
         }
     }
   return (
@@ -37,7 +60,7 @@ function Navbar() {
         animate={{opacity:1 , y:0}}
         transition={{duration: 0.3}}
         className='w-full max-w-6xl bg-white rounded-[24px] shadow-sm border border-gray-200 px-8 py-4 flex justify-between items-center relative'>
-            <div className='flex items-center gap-3 cursor-pointer'>
+            <div className='flex items-center gap-3 cursor-pointer' onClick={() => navigate("/")}>
                 <div className='bg-black text-white p-2 rounded-lg'>
                     <BsRobot size={18}/>
 
@@ -46,7 +69,7 @@ function Navbar() {
             </div>
 
             <div className='flex items-center gap-6  relative'>
-                <div className='relative'>
+                <div className='relative' ref={creditPopupRef}>
                     <button onClick={()=>{
                         if(!userData){
                             setShowAuth(true)
@@ -62,13 +85,13 @@ function Navbar() {
                     {showCreditPopup && (
                         <div className='absolute right-[-50px] mt-3 w-64 bg-white shadow-xl border border-gray-200 rounded-xl p-5 z-50'>
                             <p className='text-sm text-gray-600 mb-4'>Need more credits to continue interviews?</p>
-                            <button onClick={()=>navigate("/pricing")} className='w-full bg-black text-white py-2 rounded-lg text-sm'>Buy more credits</button>
+                            <button onClick={()=>{navigate("/pricing"); setShowCreditPopup(false)}} className='w-full bg-black text-white py-2 rounded-lg text-sm'>Buy more credits</button>
 
                         </div>
                     )}
                 </div>
 
-                <div className='relative'>
+                <div className='relative' ref={userPopupRef}>
                     <button
                     onClick={()=>{
                          if(!userData){
@@ -86,7 +109,7 @@ function Navbar() {
                         <div className='absolute right-0 mt-3 w-48 bg-white shadow-xl border border-gray-200 rounded-xl p-4 z-50'>
                             <p className='text-md text-blue-500 font-medium mb-1'>{userData?.name}</p>
 
-                            <button onClick={()=>navigate("/history")} className='w-full text-left text-sm py-2 hover:text-black text-gray-600'>InterView History</button>
+                            <button onClick={()=>{navigate("/history"); setShowUserPopup(false)}} className='w-full text-left text-sm py-2 hover:text-black text-gray-600'>InterView History</button>
                             <button onClick={handleLogout} 
                             className='w-full text-left text-sm py-2 flex items-center gap-2 text-red-500'>
                                 <HiOutlineLogout size={16}/>

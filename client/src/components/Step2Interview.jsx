@@ -10,6 +10,7 @@ import { useEffect } from 'react'
 import axios from "axios"
 import { ServerUrl } from '../App'
 import { BsArrowRight } from 'react-icons/bs'
+import toast from 'react-hot-toast'
 
 function Step2Interview({ interviewData, onFinish }) {
   const { interviewId, questions, userName } = interviewData;
@@ -30,6 +31,11 @@ function Step2Interview({ interviewData, onFinish }) {
   const [voiceGender, setVoiceGender] = useState("female");
   const [subtitle, setSubtitle] = useState("");
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTimeUp, setIsTimeUp] = useState(false);
+
+  // Auto-save refs
+  const autoSaveIntervalRef = useRef(null);
+  const latestAnswerRef = useRef("");
 
   const videoRef = useRef(null);
 
@@ -85,6 +91,19 @@ function Step2Interview({ interviewData, onFinish }) {
   }, [])
 
   const videoSource = voiceGender === "male" ? maleVideo : femaleVideo;
+
+
+  /* ----------- BROWSER REFRESH WARNING ----------- */
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (!isIntroPhase) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isIntroPhase]);
 
 
   /* ---------------- SPEAK FUNCTION ---------------- */
@@ -221,7 +240,11 @@ function Step2Interview({ interviewData, onFinish }) {
       const transcript =
         event.results[event.results.length - 1][0].transcript;
 
-      setAnswer((prev) => prev + " " + transcript);
+      setAnswer((prev) => {
+        const updated = prev + " " + transcript;
+        latestAnswerRef.current = updated;
+        return updated;
+      });
     };
 
     recognitionRef.current = recognition;
@@ -350,9 +373,10 @@ function Step2Interview({ interviewData, onFinish }) {
       speakText(result.data.feedback)
       setIsSubmitting(false)
     } catch (error) {
-console.log(error)
-setIsSubmitting(false)
-setIsTranscribing(false)
+      console.log(error)
+      toast.error("Failed to submit answer. Please try again.");
+      setIsSubmitting(false)
+      setIsTranscribing(false)
     }
   }
 
@@ -386,18 +410,106 @@ setIsTranscribing(false)
       onFinish(result.data)
     } catch (error) {
       console.log(error)
+      toast.error("Failed to finish interview. Please try again.");
     }
   }
 
 
-   useEffect(() => {
+  /* ----------- AUTO-SAVE: transcribe + save draft every 15s ----------- */
+  const saveDraftToServer = async (text) => {
+    try {
+      await axios.post(ServerUrl + "/api/interview/save-draft", {
+        interviewId,
+        questionIndex: currentIndex,
+        answer: text,
+      }, { withCredentials: true });
+    } catch (err) {
+      console.error("Draft save failed:", err);
+    }
+  };
+
+  const autoSaveTranscribe = async () => {
+    // Don't auto-save if AI is speaking, already submitting, or feedback already received
+    if (isAIPlaying || isSubmitting || feedback) return;
+
+    // Stop current recording to flush the audio data
+    await stopRecording();
+    const audioBlob = getAudioBlob();
+
+    if (audioBlob && audioBlob.size > 1000) {
+      try {
+        const groqTranscript = await transcribeWithGroq(audioBlob);
+        if (groqTranscript && groqTranscript.trim().length > 0) {
+          const updatedAnswer = groqTranscript.trim();
+          setAnswer(updatedAnswer);
+          latestAnswerRef.current = updatedAnswer;
+          // Save draft to backend
+          await saveDraftToServer(updatedAnswer);
+        }
+      } catch (err) {
+        console.error("Auto-save transcription failed:", err);
+        // Still save whatever browser STT captured
+        if (latestAnswerRef.current.trim()) {
+          await saveDraftToServer(latestAnswerRef.current.trim());
+        }
+      }
+    } else if (latestAnswerRef.current.trim()) {
+      // No meaningful audio, but there's typed/browser-STT text
+      await saveDraftToServer(latestAnswerRef.current.trim());
+    }
+
+    // Restart recording for the next chunk (only if mic is still on)
+    if (isMicOn && !isAIPlaying) {
+      await startRecording();
+    }
+  };
+
+  // Start/stop auto-save interval when interview is active
+  useEffect(() => {
+    if (isIntroPhase || !currentQuestion || isTimeUp || feedback) {
+      // Clear any existing interval
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+        autoSaveIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // Auto-save every 15 seconds
+    autoSaveIntervalRef.current = setInterval(() => {
+      autoSaveTranscribe();
+    }, 15000);
+
+    return () => {
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+        autoSaveIntervalRef.current = null;
+      }
+    };
+  }, [isIntroPhase, currentIndex, isTimeUp, feedback, isAIPlaying, isMicOn]);
+
+
+  /* ----------- TIMER EXPIRY: final transcribe + submit ----------- */
+  useEffect(() => {
     if (isIntroPhase) return;
     if (!currentQuestion) return;
 
     if (timeLeft === 0 && !isSubmitting && !feedback) {
-      submitAnswer()
+      setIsTimeUp(true);
+      // Clear auto-save interval immediately
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+        autoSaveIntervalRef.current = null;
+      }
+      submitAnswer();
     }
   }, [timeLeft]);
+
+  // Reset isTimeUp when moving to next question
+  useEffect(() => {
+    setIsTimeUp(false);
+    latestAnswerRef.current = "";
+  }, [currentIndex]);
 
   useEffect(() => {
     return () => {
@@ -407,6 +519,11 @@ setIsTranscribing(false)
       }
 
       window.speechSynthesis.cancel();
+
+      // Clean up auto-save interval
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+      }
 
       // Clean up Groq media stream
       if (mediaStreamRef.current) {
@@ -513,29 +630,35 @@ setIsTranscribing(false)
 
           <textarea
             placeholder="Your speech will appear here as you speak... (Groq Whisper will refine it on submit)"
-            onChange={(e) => setAnswer(e.target.value)}
+            onChange={(e) => {
+              setAnswer(e.target.value);
+              latestAnswerRef.current = e.target.value;
+            }}
             value={answer}
-            className="flex-1 bg-gray-100 p-4 sm:p-6 rounded-2xl resize-none outline-none border border-gray-200 focus:ring-2 focus:ring-emerald-500 transition text-gray-800" />
+            disabled={isTimeUp && !feedback}
+            className={`flex-1 bg-gray-100 p-4 sm:p-6 rounded-2xl resize-none outline-none border border-gray-200 focus:ring-2 focus:ring-emerald-500 transition text-gray-800 ${isTimeUp && !feedback ? 'opacity-60 cursor-not-allowed' : ''}`} />
 
 
-         {!feedback ? ( <div className='flex items-center gap-4 mt-6'>
-            <motion.button
-              onClick={toggleMic}
-              whileTap={{ scale: 0.9 }}
-              className='w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-full bg-black text-white shadow-lg'>
-              {isMicOn ? <FaMicrophone size={20} /> : <FaMicrophoneSlash size={20}/>}
-            </motion.button>
-
-            <motion.button
-            onClick={submitAnswer}
-            disabled={isSubmitting || isTranscribing}
-              whileTap={{ scale: 0.95 }}
-              className='flex-1 bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 sm:py-4 rounded-2xl shadow-lg hover:opacity-90 transition font-semibold disabled:bg-gray-500'>
-              {isTranscribing ? "🎙️ Transcribing..." : isSubmitting ? "Submitting..." : "Submit Answer"}
-
-            </motion.button>
-
-          </div>):(
+         {(isSubmitting || isTranscribing) && !feedback ? (
+            /* AI Evaluating Indicator */
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className='mt-6 bg-amber-50 border border-amber-200 p-5 rounded-2xl shadow-sm'
+            >
+              <div className='flex items-center gap-3 mb-2'>
+                <div className='flex gap-1'>
+                  <span className='w-2 h-2 bg-amber-500 rounded-full animate-bounce' style={{ animationDelay: '0ms' }}></span>
+                  <span className='w-2 h-2 bg-amber-500 rounded-full animate-bounce' style={{ animationDelay: '150ms' }}></span>
+                  <span className='w-2 h-2 bg-amber-500 rounded-full animate-bounce' style={{ animationDelay: '300ms' }}></span>
+                </div>
+                <p className='text-amber-700 font-medium text-sm'>
+                  {isTranscribing ? "Transcribing your audio..." : "AI is evaluating your answer..."}
+                </p>
+              </div>
+              <p className='text-amber-600 text-xs'>This usually takes a few seconds</p>
+            </motion.div>
+          ) : feedback ? (
             <motion.div 
              initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -550,6 +673,25 @@ setIsTranscribing(false)
               </button>
 
             </motion.div>
+          ) : (
+            <div className='flex items-center gap-4 mt-6'>
+            <motion.button
+              onClick={toggleMic}
+              whileTap={{ scale: 0.9 }}
+              className='w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-full bg-black text-white shadow-lg'>
+              {isMicOn ? <FaMicrophone size={20} /> : <FaMicrophoneSlash size={20}/>}
+            </motion.button>
+
+            <motion.button
+            onClick={submitAnswer}
+            disabled={isSubmitting || isTranscribing}
+              whileTap={{ scale: 0.95 }}
+              className='flex-1 bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 sm:py-4 rounded-2xl shadow-lg hover:opacity-90 transition font-semibold disabled:opacity-70'>
+              Submit Answer
+
+            </motion.button>
+
+          </div>
           )}
         </div>
       </div>
