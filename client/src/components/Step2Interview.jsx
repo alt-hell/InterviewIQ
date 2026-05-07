@@ -1,6 +1,5 @@
 import React from 'react'
-import maleVideo from "../assets/videos/male-ai.mp4"
-import femaleVideo from "../assets/videos/female-ai.mp4"
+import aiVideo from "../assets/videos/female-ai.mp4"
 import Timer from './Timer'
 import { motion } from "motion/react"
 import { FaMicrophone, FaMicrophoneSlash } from "react-icons/fa";
@@ -28,7 +27,6 @@ function Step2Interview({ interviewData, onFinish }) {
   );
   const [selectedVoice, setSelectedVoice] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [voiceGender, setVoiceGender] = useState("female");
   const [subtitle, setSubtitle] = useState("");
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isTimeUp, setIsTimeUp] = useState(false);
@@ -62,35 +60,17 @@ function Step2Interview({ interviewData, onFinish }) {
 
       if (femaleVoice) {
         setSelectedVoice(femaleVoice);
-        setVoiceGender("female");
         return;
       }
 
-      // Try known male voices
-      const maleVoice =
-        voices.find(v =>
-          v.name.toLowerCase().includes("david") ||
-          v.name.toLowerCase().includes("mark") ||
-          v.name.toLowerCase().includes("male")
-        );
-
-      if (maleVoice) {
-        setSelectedVoice(maleVoice);
-        setVoiceGender("male");
-        return;
-      }
-
-      // Fallback: first voice (assume female)
+      // Fallback: first available voice
       setSelectedVoice(voices[0]);
-      setVoiceGender("female");
     };
 
     loadVoices();
     window.speechSynthesis.onvoiceschanged = loadVoices;
 
   }, [])
-
-  const videoSource = voiceGender === "male" ? maleVideo : femaleVideo;
 
 
   /* ----------- BROWSER REFRESH WARNING ----------- */
@@ -549,8 +529,8 @@ function Step2Interview({ interviewData, onFinish }) {
         <div className='w-full lg:w-[35%] bg-white flex flex-col items-center p-6 space-y-6 border-r border-gray-200'>
           <div className='w-full max-w-md rounded-2xl overflow-hidden shadow-xl'>
             <video
-              src={videoSource}
-              key={videoSource}
+              src={aiVideo}
+              key="ai-video"
               ref={videoRef}
               muted
               playsInline
