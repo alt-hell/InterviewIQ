@@ -225,14 +225,15 @@ function Step2Interview({ interviewData, onFinish }) {
   }, [currentIndex, isIntroPhase]);
 
 
-  // Browser speech recognition (live preview only — accumulates interim + final results)
+  // Browser speech recognition (live preview — Groq Whisper refines on submit)
   useEffect(() => {
-    if (!("webkitSpeechRecognition" in window)) return;
+    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) return;
 
-    const recognition = new window.webkitSpeechRecognition();
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
     recognition.lang = "en-US";
     recognition.continuous = true;
-    recognition.interimResults = true; // capture partial speech so nothing is missed
+    recognition.interimResults = true;
 
     recognition.onresult = (event) => {
       let finalTranscript = "";
@@ -241,24 +242,30 @@ function Step2Interview({ interviewData, onFinish }) {
           finalTranscript += event.results[i][0].transcript + " ";
         }
       }
-
       if (finalTranscript.trim()) {
+        // Simply append — Groq Whisper will override on submit with the accurate version
         setAnswer((prev) => {
-          // Only append from browser STT when Groq hasn't taken over yet
-          if (accumulatedGroqRef.current.trim()) return prev; // Groq is driving
-          const updated = prev + " " + finalTranscript.trim();
+          const updated = (prev + " " + finalTranscript.trim()).trimStart();
           latestAnswerRef.current = updated;
           return updated;
         });
       }
     };
 
-    recognitionRef.current = recognition;
+    recognition.onerror = (e) => {
+      // 'no-speech' and 'aborted' are normal — only warn on real errors
+      if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        console.warn('SpeechRecognition error:', e.error);
+      }
+    };
 
+    recognitionRef.current = recognition;
   }, []);
 
 
   /* ----------- MEDIA RECORDER (Groq Whisper — single transcription call on submit) ----------- */
+  const mimeTypeRef = useRef('audio/webm'); // cached at recorder creation — survives after stop()
+
   const startRecording = async () => {
     try {
       if (!mediaStreamRef.current) {
@@ -281,8 +288,9 @@ function Step2Interview({ interviewData, onFinish }) {
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
 
-      const recorder = new MediaRecorder(mediaStreamRef.current, { mimeType });
+      mimeTypeRef.current = mimeType; // cache so getAudioBlob works after recorder is destroyed
 
+      const recorder = new MediaRecorder(mediaStreamRef.current, { mimeType });
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
@@ -291,7 +299,12 @@ function Step2Interview({ interviewData, onFinish }) {
       recorder.start(250);
       mediaRecorderRef.current = recorder;
     } catch (err) {
-      console.error('MediaRecorder start error:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        toast.error('Microphone access denied. Please allow mic in browser settings and refresh.');
+      } else {
+        console.error('MediaRecorder start error:', err);
+        toast.error('Could not start recording. Please check microphone.');
+      }
     }
   };
 
@@ -302,22 +315,24 @@ function Step2Interview({ interviewData, onFinish }) {
     }
   };
 
-  // Fully stop recording (used only on submit or question transition)
+  // Fully stop recording — onstop assigned BEFORE stop() to avoid the race where
+  // onstop fires synchronously on some browsers before the assignment.
   const stopRecording = () => {
     return new Promise((resolve) => {
-      if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
+      const rec = mediaRecorderRef.current;
+      if (!rec || rec.state === 'inactive') {
         resolve();
         return;
       }
-      mediaRecorderRef.current.onstop = () => resolve();
-      mediaRecorderRef.current.stop();
+      rec.onstop = () => resolve();  // MUST be set before calling stop()
+      rec.stop();
     });
   };
 
   const getAudioBlob = () => {
     if (audioChunksRef.current.length === 0) return null;
-    const mimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
-    return new Blob(audioChunksRef.current, { type: mimeType });
+    // Use cached mimeType — mediaRecorderRef.current may be null/inactive by now
+    return new Blob(audioChunksRef.current, { type: mimeTypeRef.current });
   };
 
   const transcribeWithGroq = async (blob) => {
@@ -366,6 +381,15 @@ function Step2Interview({ interviewData, onFinish }) {
 
   const submitAnswer = async () => {
     if (isSubmitting) return;
+
+    // Guard: require at least some answer — either typed, STT text, or audio
+    const hasAudio = audioChunksRef.current.length > 0;
+    const hasText = answer.trim().length > 0;
+    if (!hasAudio && !hasText) {
+      toast.error('No answer detected. Please speak or type your answer first.');
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitError(false);
 
@@ -374,7 +398,7 @@ function Step2Interview({ interviewData, onFinish }) {
     await stopRecording();
 
     try {
-      let finalAnswer = answer; // browser STT text as fallback
+      let finalAnswer = answer.trim(); // browser STT text as fallback
       const audioBlob = getAudioBlob(); // full answer audio — entire question duration
 
       // Single Groq Whisper call with the complete answer audio
@@ -387,6 +411,7 @@ function Step2Interview({ interviewData, onFinish }) {
           }
         } catch (err) {
           console.error('Groq transcription failed, using browser STT fallback:', err);
+          // finalAnswer stays as browser STT text — still submitted
         }
         setIsTranscribing(false);
       }
@@ -405,7 +430,7 @@ function Step2Interview({ interviewData, onFinish }) {
       setIsSubmitting(false);
     } catch (error) {
       console.error(error);
-      setSubmitError(true);    // show retry button instead of losing the answer
+      setSubmitError(true);
       setIsSubmitting(false);
       setIsTranscribing(false);
       toast.error("Submission failed. Your answer is saved — tap Retry.");
