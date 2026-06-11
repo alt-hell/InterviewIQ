@@ -1,5 +1,5 @@
 import Groq from "groq-sdk";
-import fs from "fs";
+import { Readable } from "stream";
 
 // Lazy initialization — only creates Groq client when actually needed
 let groq = null;
@@ -15,15 +15,25 @@ const getGroqClient = () => {
 };
 
 /**
- * Transcribe audio file using Groq's Whisper large-v3-turbo model
+ * Transcribe audio from an in-memory Buffer using Groq Whisper large-v3-turbo.
+ * No disk I/O — buffer comes directly from multer memoryStorage.
  * Free tier: 20 req/min, 2000 audio seconds/hour
+ *
+ * @param {Buffer} buffer   - Raw audio bytes
+ * @param {string} mimetype - e.g. "audio/webm" or "audio/ogg"
  */
-export const transcribeAudio = async (filePath) => {
+export const transcribeAudio = async (buffer, mimetype = "audio/webm") => {
   try {
     const client = getGroqClient();
 
+    // Build a Readable stream from the buffer and attach a filename
+    // so Groq SDK can infer the file format correctly
+    const ext = mimetype.includes("ogg") ? "ogg" : "webm";
+    const stream = Readable.from(buffer);
+    stream.path = `answer.${ext}`;
+
     const transcription = await client.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
+      file: stream,
       model: "whisper-large-v3-turbo",
       language: "en",
       response_format: "json",

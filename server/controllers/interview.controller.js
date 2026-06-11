@@ -4,6 +4,7 @@ import { askAi } from "../services/openRouter.service.js";
 import { transcribeAudio } from "../services/groq.service.js";
 import User from "../models/user.model.js";
 import Interview from "../models/interview.model.js";
+import path from "path";
 
 
 // Safely parse JSON from AI responses — strips markdown code fences if present
@@ -15,25 +16,18 @@ const safeJsonParse = (text) => {
 };
 
 
-// Groq Whisper Speech-to-Text endpoint
+// Groq Whisper Speech-to-Text endpoint — audio is in-memory (no disk I/O)
 export const transcribeAnswer = async (req, res) => {
   try {
-    if (!req.file) {
+    if (!req.file || !req.file.buffer) {
       return res.status(400).json({ message: "Audio file required" });
     }
 
-    const transcript = await transcribeAudio(req.file.path);
-
-    // Clean up temp file
-    if (fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+    // Pass buffer + mimetype directly — no temp file needed
+    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype);
 
     return res.json({ transcript: transcript.trim() });
   } catch (error) {
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
     console.error("Transcription error:", error);
     return res.status(500).json({ message: `Transcription failed: ${error.message}` });
   }
@@ -230,9 +224,8 @@ Make questions based on the candidate’s role, experience,interviewMode, projec
       });
     }
 
-    user.credits -= 50;
-    await user.save();
-
+    // Create interview FIRST — deduct credits only after success
+    // (prevents credit loss when MongoDB is temporarily unavailable)
     const interview = await Interview.create({
       userId: user._id,
       role,
@@ -244,7 +237,10 @@ Make questions based on the candidate’s role, experience,interviewMode, projec
         difficulty: ["easy", "easy", "medium", "medium", "hard"][index],
         timeLimit: [60, 60, 90, 90, 120][index],
       }))
-    })
+    });
+
+    user.credits -= 50;
+    await user.save();
 
     res.json({
       interviewId: interview._id,
@@ -409,8 +405,9 @@ export const saveDraft = async (req, res) => {
       return res.status(404).json({ message: "Question not found." });
     }
 
-    // Only save draft if the question hasn't been fully submitted yet (no score)
-    if (question.score > 0 || question.feedback) {
+    // BUG FIX: score can legitimately be 0 (bad answer that was evaluated).
+    // Use feedback presence as the definitive signal that evaluation is complete.
+    if (question.feedback) {
       return res.json({ saved: false, message: "Answer already submitted and evaluated." });
     }
 
@@ -430,6 +427,27 @@ export const finishInterview = async (req,res) => {
     const interview = await Interview.findById(interviewId)
     if(!interview){
       return res.status(400).json({message:"failed to find Interview"})
+    }
+
+    // Idempotent: if already completed, return the cached result without recalculating
+    if (interview.status === 'completed') {
+      const totalQ = interview.questions.length || 1;
+      const sums = interview.questions.reduce((acc, q) => ({
+        confidence: acc.confidence + (q.confidence || 0),
+        communication: acc.communication + (q.communication || 0),
+        correctness: acc.correctness + (q.correctness || 0),
+      }), { confidence: 0, communication: 0, correctness: 0 });
+      return res.status(200).json({
+        finalScore: Number(interview.finalScore.toFixed(1)),
+        confidence: Number((sums.confidence / totalQ).toFixed(1)),
+        communication: Number((sums.communication / totalQ).toFixed(1)),
+        correctness: Number((sums.correctness / totalQ).toFixed(1)),
+        questionWiseScore: interview.questions.map((q) => ({
+          question: q.question, score: q.score || 0,
+          feedback: q.feedback || "", confidence: q.confidence || 0,
+          communication: q.communication || 0, correctness: q.correctness || 0,
+        })),
+      });
     }
 
     const totalQuestions = interview.questions.length;
